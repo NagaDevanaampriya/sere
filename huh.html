@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Gesture Particle System - Birthday Edition</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.2/gsap.min.js"></script>
+
+    <style>
+        body { margin: 0; background-color: #050816; overflow: hidden; font-family: 'Segoe UI', sans-serif; }
+        canvas { display: block; }
+
+        /* UI overlay */
+        #ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            pointer-events: none;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+            z-index: 10;
+            align-items: center;
+        }
+
+        /* Animated glowing h2 */
+        #ui-overlay h1 {
+            margin: 0;
+            padding: 8px 18px;
+            font-size: 26px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            background: linear-gradient(90deg,#aba9bf,#8ebfc9,#c1c0cd);
+            -webkit-background-clip: text;
+            color: transparent;
+            filter: drop-shadow(0 0 6px rgba(229,46,113,0.9));
+            animation: glowPulse 2.5s ease-in-out infinite, floatTitle 6s ease-in-out infinite;
+            font-family:Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif;
+            font-size: 50px;
+            float: right;
+        }
+
+        @keyframes glowPulse {
+            0% {
+                text-shadow:
+                    0 0 12px rgb(250, 249, 249),
+                    0 0 24px rgb(216, 211, 213);
+                filter: drop-shadow(0 0 4px rgba(255,255,255,0.4));
+            }
+            10% {
+                text-shadow:
+                    0 0 18px rgb(220, 212, 210),
+                    0 0 36px rgba(229,46,113,1);
+                filter: drop-shadow(0 0 10px rgba(39, 9, 9, 0.9));
+            }
+        }
+
+        @keyframes floatTitle {
+            0%,100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
+
+        .status {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        #gesture-hint {
+            position: absolute;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            color: #a8e063;
+            font-weight: bold;
+            text-shadow: 0 0 5px rgba(0,255,0,0.5);
+            z-index: 10;
+        }
+
+        /* Webcam preview bottom-right */
+        #webcam-wrapper {
+          position: absolute;
+            right: 20px;
+            bottom: 80px;               /* lifted so it does not overlap the text */
+            width: 260px;
+            height: 160px;
+            border-radius: 18px;
+            overflow: hidden;
+            box-shadow: 0 16px 28px rgba(0,0,0,0.85);
+            border: 1px solid rgba(255,255,255,0.18);
+            backdrop-filter: blur(10px);
+            background: linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02));
+            z-index: 15;
+            transform: translateY(0);
+            animation: webcamFloat 5s ease-in-out infinite;
+        }
+
+       #webcam-label {
+            position: absolute;
+            top: 4px;
+            left: 10px;
+            font-size: 11px;
+            color: #f5f5f5;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            opacity: 0.8;
+            z-index: 2;
+        }
+
+        @keyframes webcamFloat {
+            0%,100% { transform: translateY(0); }
+            50% { transform: translateY(-6px); }
+        }
+
+        #input_video {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: calc(100% - 14px);
+            object-fit: cover;
+            transform: scaleX(-1); /* mirror like a selfie */
+        }
+
+        #text_canvas { display:none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-overlay">
+        <h1>Happy Birthday Sreekutti</h1>
+        <br>
+        <br>
+        <h4>Sreekutti Happy Birthday , May god bless you.<br> We all you miss you so much. You are so loved<br>
+        May all your wishes come true this year.<br>Every birthday is a new chapter you step into <br>and may this be your year.
+    <br> Once again HAPPY BIRTHDAY MY SWEET LITTLE SREEKUTTI,<br> LOVE YOU SO MUCH 💅❤️❤️❤️❤️🎉🎉💅💅✨✨</h4>
+        <div class="status" id="status">Loading...</div>
+        <div class="status">Current Shape: <span id="current-shape-display"></span></div>
+    </div>
+
+    <div id="gesture-hint">
+        Pinch (Thumb & Index) to Cycle Shapes • Open Hand (Thumb & Pinky) to Scale • Move Hand to Rotate
+    </div>
+
+    <!-- Webcam bottom-right -->
+    <div id="webcam-wrapper">
+        <span id="webcam-label">Webcam</span>
+        <video id="input_video" autoplay muted playsinline></video>
+    </div>
+
+    <canvas id="text_canvas"></canvas> 
+
+    <script type="module">
+        // --- CONFIGURATION ---
+        const PARTICLE_COUNT = 25000;
+        const TEXT_MESSAGE = "Happy Birthday Sreemayi";
+        const SHAPE_ORDER = ['heart', 'cake', 'text'];
+
+        let scene, camera, renderer, points, geometry;
+        let shapes = { current: SHAPE_ORDER[0], heart: [], cake: [], text: [] };
+        let isTransitioning = false;
+        let animationFrameId;
+
+        function fillShapeWithRandomParticles(shapeArray, targetLength, generatorFunction) {
+            for (let i = 0; i < targetLength; i++) {
+                const pos = generatorFunction(i, targetLength);
+                shapeArray.push(pos.x, pos.y, pos.z);
+            }
+        }
+
+        function createMathShapes() {
+            // Heart
+            fillShapeWithRandomParticles(shapes.heart, PARTICLE_COUNT, () => {
+                const t = Math.random() * Math.PI * 2;
+                const x = 16 * Math.pow(Math.sin(t), 3) / 10;
+                const y = (13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t)) / 10;
+                return new THREE.Vector3(x, y, (Math.random() - 0.5) * 0.5);
+            });
+
+            // Cake + candles
+            fillShapeWithRandomParticles(shapes.cake, PARTICLE_COUNT, () => {
+                const cakeBaseHeight = 1.0;
+                const cakeRadius = 1.5;
+                const candleHeight = 0.8;
+                const numCandles = 5;
+
+                if (Math.random() < 0.8) {
+                    const angle = Math.random() * Math.PI * 2;
+                    const r = Math.sqrt(Math.random()) * cakeRadius;
+                    const x = Math.cos(angle) * r;
+                    const z = Math.sin(angle) * r;
+                    const y = Math.random() * cakeBaseHeight - cakeBaseHeight / 2;
+                    return new THREE.Vector3(x, y, z);
+                } else {
+                    const candleIndex = Math.floor(Math.random() * numCandles);
+                    const candleAngle = (candleIndex / numCandles) * Math.PI * 2 + Math.PI / numCandles;
+                    const candleX = Math.cos(candleAngle) * (cakeRadius * 0.7);
+                    const candleZ = Math.sin(candleAngle) * (cakeRadius * 0.7);
+                    const candleY = (Math.random() * candleHeight) + cakeBaseHeight / 2 + 0.1;
+                    return new THREE.Vector3(candleX, candleY, candleZ);
+                }
+            });
+        }
+
+        async function createTextShape() {
+            return new Promise((resolve) => {
+                const canvas = document.getElementById('text_canvas');
+                const ctx = canvas.getContext('2d');
+                canvas.width = 1024;
+                canvas.height = 256;
+                ctx.fillStyle = 'black';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+                ctx.font = 'bold 80px Arial';
+                ctx.fillStyle = 'white';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(TEXT_MESSAGE, canvas.width / 2, canvas.height / 2);
+
+                const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                const data = imageData.data;
+                const textCoords = [];
+
+                for (let y = 0; y < canvas.height; y += 2) {
+                    for (let x = 0; x < canvas.width; x += 2) {
+                        const index = (y * canvas.width + x) * 4;
+                        if (data[index + 3] > 128) {
+                            textCoords.push(
+                                (x - canvas.width / 2) * 0.008,
+                                (canvas.height / 2 - y) * 0.008,
+                                (Math.random() - 0.5) * 0.1
+                            );
+                        }
+                    }
+                }
+
+                while (textCoords.length < PARTICLE_COUNT * 3) {
+                    const randomIndex = Math.floor(Math.random() * (textCoords.length / 3)) * 3;
+                    textCoords.push(
+                        textCoords[randomIndex],
+                        textCoords[randomIndex + 1],
+                        textCoords[randomIndex + 2]
+                    );
+                }
+                shapes.text = textCoords.slice(0, PARTICLE_COUNT * 3);
+                resolve();
+            });
+        }
+
+        async function init() {
+            document.getElementById('status').innerText = "Generating Shapes...";
+            createMathShapes();
+            await createTextShape();
+            document.getElementById('status').innerText = "Initializing 3D Scene...";
+
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+            camera.position.z = 5;
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            document.body.appendChild(renderer.domElement);
+
+            geometry = new THREE.BufferGeometry();
+            const initialPos = new Float32Array(shapes[shapes.current]);
+            geometry.setAttribute('position', new THREE.BufferAttribute(initialPos, 3));
+
+            const material = new THREE.PointsMaterial({
+                size: 0.025,
+                color: 0xffcc00,
+                transparent: true,
+                opacity: 0.9,
+                blending: THREE.AdditiveBlending
+            });
+
+            points = new THREE.Points(geometry, material);
+            scene.add(points);
+            
+            document.getElementById('current-shape-display').innerText = shapes.current.toUpperCase();
+            initTracking();
+            animate();
+        }
+
+        function initTracking() {
+            const videoElement = document.getElementById('input_video');
+            const hands = new Hands({locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+            
+            hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7 });
+            
+            hands.onResults((results) => {
+                document.getElementById('status').innerText = "AI Active: Hand Tracking ON";
+                if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+                    const hand = results.multiHandLandmarks[0];
+                    
+                    const targetRotationY = (hand[0].x - 0.5) * 4;
+                    const targetRotationX = (hand[0].y - 0.5) * 4;
+                    points.rotation.y += (targetRotationY - points.rotation.y) * 0.1;
+                    points.rotation.x += (targetRotationX - points.rotation.x) * 0.1;
+
+                    const spread = Math.hypot(hand[20].x - hand[4].x, hand[20].y - hand[4].y);
+                    const targetScale = 0.5 + (spread * 2.5);
+                    points.scale.setScalar(THREE.MathUtils.lerp(points.scale.x, targetScale, 0.1));
+
+                    const pinchDist = Math.hypot(hand[8].x - hand[4].x, hand[8].y - hand[4].y);
+                    if (pinchDist < 0.03 && !isTransitioning) {
+                        toggleShape();
+                    }
+
+                    const handHeight = hand[0].y;
+                    const colorLerp = THREE.MathUtils.mapLinear(handHeight, 0.1, 0.9, 0, 1);
+                    const targetColor = new THREE.Color();
+                    targetColor.setHSL(colorLerp, 1, 0.7);
+                    points.material.color.lerp(targetColor, 0.1);
+                } else {
+                    document.getElementById('status').innerText = "AI Active: No Hand Detected";
+                }
+            });
+
+            const cameraPipe = new Camera(videoElement, {
+                onFrame: async () => { await hands.send({image: videoElement}); },
+                width: 640, height: 480
+            });
+            cameraPipe.start();
+        }
+
+        function toggleShape() {
+            isTransitioning = true;
+            let nextIndex = (SHAPE_ORDER.indexOf(shapes.current) + 1) % SHAPE_ORDER.length;
+            shapes.current = SHAPE_ORDER[nextIndex];
+
+            document.getElementById('current-shape-display').innerText = shapes.current.toUpperCase();
+
+            gsap.to(geometry.attributes.position.array, {
+                endArray: shapes[shapes.current],
+                duration: 2,
+                ease: "expo.inOut",
+                onUpdate: () => geometry.attributes.position.needsUpdate = true,
+                onComplete: () => { 
+                    isTransitioning = false; 
+                }
+            });
+        }
+
+        function animate() {
+            animationFrameId = requestAnimationFrame(animate);
+            points.rotation.z += 0.001; 
+            renderer.render(scene, camera);
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+
+        document.addEventListener('DOMContentLoaded', init);
+    </script>
+</body>
+</html>
